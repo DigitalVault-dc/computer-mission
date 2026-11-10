@@ -367,6 +367,7 @@ function renderTeach() {
   $("#tClasses").innerHTML = T.classes.map(c => `<button type="button" class="tc ${c.id === T.cls ? "on" : ""}" data-id="${esc(c.id)}" style="--cc:${esc(c.color)}"><i></i><span>${esc(c.name)}</span><small>${studentsOf(c.id).length}명</small></button>`).join("") || `<p class="muted">아직 반이 없어요.</p>`;
   $("#tClasses").querySelectorAll(".tc").forEach(b => b.onclick = () => { T.cls = b.dataset.id; T.sel.clear(); renderTeach(); });
   const m = $("#tMain");
+  m.classList.remove("bd-multi");
   setAuto();
   if (T.cls === "ALL") { renderBoard(m, null); return; }
   if (!cl) { m.innerHTML = `<div class="t-empty"><h2>반을 먼저 만들어 주세요</h2><p>왼쪽의 <b>＋ 반 만들기</b>를 누르면 반 이름과 입장 코드를 정할 수 있어요.</p></div>`; return; }
@@ -429,24 +430,44 @@ function setAuto() {
   }, 30000);
   if (!want && T.timer) { clearInterval(T.timer); T.timer = null; }
 }
+function boardTable(list) {
+  const used = LESSONS.filter(l => list.some(x => (x.s.assigned || []).includes(l.id)));
+  if (!list.length) return `<p class="muted center">학생이 없어요.</p>`;
+  return `<div class="bd-wrap"><table class="bd"><thead><tr><th class="bd-n">이름</th><th>상태</th><th class="bd-now">지금 할 것</th>${used.map(l => `<th class="bd-l" title="${esc(lname(l) + " " + l.title)}">${stage(l.course).replace("단계", "")}-${l.no}</th>`).join("")}<th>완료</th><th>별</th></tr></thead>
+    <tbody>${list.map(({ s, p }) => {
+      const st = s.stars || {}, lv = liveOf(s.last), a = ago(s.last);
+      let nowTxt = p.mine.length ? `<span class="ok">✔ 모두 끝냄</span>` : `<span class="muted">차시 안 정함</span>`;
+      if (p.now) {
+        const k = p.now.acts.findIndex(x => (Number(st[p.now.id + ":" + x]) || 0) < 3), A = ACTS[p.now.acts[k]];
+        nowTxt = `<b>${esc(lname(p.now))}</b> <span class="muted">${esc(p.now.title)}</span><div class="bd-bar"><i style="width:${Math.round(p.nowActs / p.now.acts.length * 100)}%"></i></div><small>${p.nowActs}/${p.now.acts.length} · 다음: ${A ? esc(A.name) : ""}</small>`;
+      }
+      return `<tr class="lv-${lv}"><th class="bd-n"><button type="button" class="bd-name" data-view="${esc(s.id)}">${esc(s.name)}</button></th><td class="nw"><span class="lv-dot"></span>${a || "-"}</td><td class="bd-now">${nowTxt}</td>${used.map(l => {
+        if (!(s.assigned || []).includes(l.id)) return `<td class="bd-x"></td>`;
+        const sc = l.acts.map(x => Number(st[l.id + ":" + x]) || 0), done = sc.every(x => x >= 3);
+        return `<td class="bd-c ${done ? "done" : ""} ${p.now === l ? "cur" : ""}" title="${esc(lname(l) + " " + l.title)} · ${l.acts.map((x, i) => `${ACTS[x].name}: 별 ${sc[i]}개`).join(" · ")}">${done ? "✔" : `<span class="bd-dots">${sc.map(x => `<i class="${x >= 3 ? "s3" : x > 0 ? "s1" : "s0"}"></i>`).join("")}</span>`}</td>`;
+      }).join("")}<td class="num c">${p.done.length}/${p.mine.length}</td><td class="num c">${p.starSum}</td></tr>`;
+    }).join("")}</tbody></table></div>`;
+}
 function renderBoard(box, cl) {
-  const ss = (cl ? studentsOf(cl.id) : T.students.slice()).map(s => ({ s, p: progressOf(s) }));
-  const clsName = id => { const c = T.classes.find(x => x.id === id); return c ? c.name : ""; };
-  const used = LESSONS.filter(l => ss.some(x => (x.s.assigned || []).includes(l.id)));
   const pct = x => x.p.starMax ? x.p.done.length / Math.max(1, x.p.mine.length) + x.p.starSum / x.p.starMax / 100 : -1;
-  if (T.sort === "slow") ss.sort((a, b) => pct(a) - pct(b));
-  else if (T.sort === "fast") ss.sort((a, b) => pct(b) - pct(a));
-  else if (T.sort === "recent") ss.sort((a, b) => String(b.s.last).localeCompare(String(a.s.last)));
-  else ss.sort((a, b) => (cl ? 0 : clsName(a.s.classId).localeCompare(clsName(b.s.classId), "ko")) || a.s.name.localeCompare(b.s.name, "ko"));
-  const live = ss.filter(x => liveOf(x.s.last) === "on").length;
-  const allDone = ss.filter(x => x.p.mine.length && !x.p.now).length;
-  const noPlan = ss.filter(x => !x.p.mine.length).length;
-  const head = cl ? "" : `<div class="t-head"><h2>📊 모든 반 진도판</h2><span class="sp"></span></div>`;
+  const sorted = arr => {
+    if (T.sort === "slow") arr.sort((a, b) => pct(a) - pct(b));
+    else if (T.sort === "fast") arr.sort((a, b) => pct(b) - pct(a));
+    else if (T.sort === "recent") arr.sort((a, b) => String(b.s.last).localeCompare(String(a.s.last)));
+    else arr.sort((a, b) => a.s.name.localeCompare(b.s.name, "ko"));
+    return arr;
+  };
+  const groups = (cl ? [cl] : T.classes).map(c => ({ c, list: sorted(studentsOf(c.id).map(s => ({ s, p: progressOf(s) }))) }));
+  const all = groups.flatMap(g => g.list);
+  const stat = list => ({ n: list.length, live: list.filter(x => liveOf(x.s.last) === "on").length, done: list.filter(x => x.p.mine.length && !x.p.now).length, none: list.filter(x => !x.p.mine.length).length });
+  const S0 = stat(all);
+  const head = cl ? "" : `<div class="t-head"><h2>📊 모든 반 진도판</h2><span class="sp"></span></div>
+    ${groups.length > 1 ? `<div class="bd-jump">${groups.map(g => `<button type="button" data-jump="${esc(g.c.id)}" style="--cc:${esc(g.c.color)}"><i></i>${esc(g.c.name)} <small>${g.list.length}명</small></button>`).join("")}</div>` : ""}`;
   box.innerHTML = head + `<div class="bd-top">
-      <span class="bd-chip">학생 <b>${ss.length}</b>명</span>
-      <span class="bd-chip on">🟢 지금 학습 중 <b>${live}</b>명</span>
-      <span class="bd-chip">✔ 정한 차시 모두 끝냄 <b>${allDone}</b>명</span>
-      ${noPlan ? `<span class="bd-chip warn">차시를 안 정한 학생 <b>${noPlan}</b>명</span>` : ""}
+      <span class="bd-chip">학생 <b>${S0.n}</b>명</span>
+      <span class="bd-chip on">🟢 지금 학습 중 <b>${S0.live}</b>명</span>
+      <span class="bd-chip">✔ 정한 차시 모두 끝냄 <b>${S0.done}</b>명</span>
+      ${S0.none ? `<span class="bd-chip warn">차시를 안 정한 학생 <b>${S0.none}</b>명</span>` : ""}
       <span class="sp"></span>
       <label class="bd-sort">정렬 <select id="bdSort"><option value="name">이름순</option><option value="slow">느린 학생 먼저</option><option value="fast">빠른 학생 먼저</option><option value="recent">최근 학습 순</option></select></label>
       <label class="bd-auto"><input type="checkbox" id="bdAuto" ${T.auto ? "checked" : ""}> 30초마다 자동 새로 고침</label>
@@ -454,25 +475,17 @@ function renderBoard(box, cl) {
       <span class="muted bd-at">${T.at ? `${String(T.at.getHours()).padStart(2, "0")}:${String(T.at.getMinutes()).padStart(2, "0")}:${String(T.at.getSeconds()).padStart(2, "0")} 기준` : ""}</span>
     </div>
     <p class="bd-legend"><span><i class="s3"></i>별 3개(통과)</span><span><i class="s1"></i>도전 중</span><span><i class="s0"></i>아직 안 함</span><span><b class="cur-k">테두리</b> 지금 할 차시</span><span>칸 안 점 하나 = 활동 하나</span></p>
-    ${ss.length ? `<div class="bd-wrap"><table class="bd"><thead><tr><th class="bd-n">이름</th>${cl ? "" : "<th>반</th>"}<th>상태</th><th class="bd-now">지금 할 것</th>${used.map(l => `<th class="bd-l" title="${esc(lname(l) + " " + l.title)}">${stage(l.course).replace("단계", "")}-${l.no}</th>`).join("")}<th>완료</th><th>별</th></tr></thead>
-    <tbody>${ss.map(({ s, p }) => {
-      const st = s.stars || {}, lv = liveOf(s.last), a = ago(s.last);
-      let nowTxt = p.mine.length ? `<span class="ok">✔ 모두 끝냄</span>` : `<span class="muted">차시 안 정함</span>`;
-      if (p.now) {
-        const k = p.now.acts.findIndex(x => (Number(st[p.now.id + ":" + x]) || 0) < 3), A = ACTS[p.now.acts[k]];
-        nowTxt = `<b>${esc(lname(p.now))}</b> <span class="muted">${esc(p.now.title)}</span><div class="bd-bar"><i style="width:${Math.round(p.nowActs / p.now.acts.length * 100)}%"></i></div><small>${p.nowActs}/${p.now.acts.length} · 다음: ${A ? esc(A.name) : ""}</small>`;
-      }
-      return `<tr class="lv-${lv}"><th class="bd-n"><button type="button" class="bd-name" data-view="${esc(s.id)}">${esc(s.name)}</button></th>${cl ? "" : `<td class="nw muted">${esc(clsName(s.classId))}</td>`}<td class="nw"><span class="lv-dot"></span>${a || "-"}</td><td class="bd-now">${nowTxt}</td>${used.map(l => {
-        if (!(s.assigned || []).includes(l.id)) return `<td class="bd-x"></td>`;
-        const sc = l.acts.map(x => Number(st[l.id + ":" + x]) || 0), done = sc.every(x => x >= 3);
-        return `<td class="bd-c ${done ? "done" : ""} ${p.now === l ? "cur" : ""}" title="${esc(lname(l) + " " + l.title)} · ${l.acts.map((x, i) => `${ACTS[x].name}: 별 ${sc[i]}개`).join(" · ")}">${done ? "✔" : `<span class="bd-dots">${sc.map(x => `<i class="${x >= 3 ? "s3" : x > 0 ? "s1" : "s0"}"></i>`).join("")}</span>`}</td>`;
-      }).join("")}<td class="num c">${p.done.length}/${p.mine.length}</td><td class="num c">${p.starSum}</td></tr>`;
-    }).join("")}</tbody></table></div>` : `<p class="muted center">학생이 없어요.</p>`}
+    ${cl ? boardTable(groups[0].list) : groups.length ? groups.map(g => { const st = stat(g.list); return `<section class="bd-sec" id="bd-${esc(g.c.id)}" style="--cc:${esc(g.c.color)}">
+      <div class="bd-sh"><i></i><h3>${esc(g.c.name)}</h3><span class="muted">학생 ${st.n}명 · 🟢 학습 중 ${st.live}명 · ✔ 끝냄 ${st.done}명${st.none ? ` · 차시 안 정함 ${st.none}명` : ""}</span><span class="sp"></span><button type="button" class="ghost xs" data-open="${esc(g.c.id)}">이 반 관리 ▶</button></div>
+      ${boardTable(g.list)}</section>`; }).join("") : `<p class="muted center">아직 반이 없어요.</p>`}
     <p class="muted bd-tip">이름을 누르면 그 학생의 자세한 기록이 열려요. 상태: 🟢 5분 안에 활동함 · 🟡 30분 안 · ⚪ 그 전</p>`;
+  box.classList.toggle("bd-multi", !cl);
   const so = box.querySelector("#bdSort"); so.value = T.sort; so.onchange = () => { T.sort = so.value; renderTeach(); };
   box.querySelector("#bdAuto").onchange = e => { T.auto = e.target.checked; setAuto(); };
   box.querySelector("#bdRe").onclick = async () => { if (await loadT()) renderTeach(); };
   box.querySelectorAll("[data-view]").forEach(b => b.onclick = () => viewStudent(b.dataset.view));
+  box.querySelectorAll("[data-jump]").forEach(b => b.onclick = () => { const t = box.querySelector("#bd-" + CSS.escape(b.dataset.jump)); if (t) t.scrollIntoView({ behavior: "smooth", block: "start" }); });
+  box.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { T.cls = b.dataset.open; T.view = "board"; T.sel.clear(); renderTeach(); });
 }
 function confirmBox(msg, okText, fn) {
   const d = modal(`<h3>확인</h3><p>${msg}</p><div class="row"><button type="button" class="ghost" data-close>취소</button><button type="button" class="primary danger-b" data-ok>${okText}</button></div>`);
